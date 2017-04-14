@@ -1,5 +1,5 @@
 import os
-import cPickle as pkl
+import pickle as pkl
 import PIL.Image as Image
 import timeit
 import numpy as np
@@ -72,12 +72,15 @@ def load_data(split="inpainting/train2014", caption_path="inpainting/dict_key_im
 
         # Code heavily inspired if not directly from examples.py on project description page.
 
-        data_path = os.path.join(os.getcwd(), split)
-        caption_path = os.path.join(os.getcwd(), caption_path)
+        #data_path = os.path.join(os.getcwd(), split)
+        data_path = "/Users/williamperrault/Desktop/University/Maitrise/1st_year/H2017/IFT6266/Projet/inpainting/train2014"
+
+        #caption_path = os.path.join(os.getcwd(), caption_path)
+        caption_path="/Users/williamperrault/Desktop/University/Maitrise/1st_year/H2017/IFT6266/Projet/inpainting/dict_key_imgID_value_caps_train_and_valid.pkl"
         with open(caption_path) as fd:
             caption_dict = pkl.load(fd)
 
-        print data_path + "/*.jpg"
+        print (data_path + "/*.jpg")
         imgs = glob.glob(data_path + "/*.jpg")
         Data=np.empty([len(imgs),64,64,3])
 
@@ -118,11 +121,11 @@ def load_data(split="inpainting/train2014", caption_path="inpainting/dict_key_im
                     #Image.fromarray(img_array).show()
                     Image.fromarray(input).show()
                     Image.fromarray(target).show()
-                    print i, caption_dict[cap_id]
+                    print (i, caption_dict[cap_id])
 
         end_time = timeit.default_timer()
 
-        print "Done loading data. Code ran for : ", (end_time - start_time) / 60. , "minutes"
+        print ("Done loading data. Code ran for : ", (end_time - start_time) / 60. , "minutes")
 
         return Data # Data_hole (input)
 
@@ -143,7 +146,7 @@ def train_DCGAN(learning_rate=0.01,n_epochs=10,batch_size=20):
     n_train_batches = X_train.shape[0] // batch_size
 
     # Create neural network model
-    print ".........building the model"
+    print (".........building the model")
 
     generator = build_generator(noise)
     gen_image = lasagne.layers.get_output(generator)
@@ -172,7 +175,7 @@ def train_DCGAN(learning_rate=0.01,n_epochs=10,batch_size=20):
 
     # Training Loop
 
-    print ".........begin Training"
+    print(".........begin Training")
 
     pdb.set_trace()
 
@@ -196,15 +199,15 @@ def train_DCGAN(learning_rate=0.01,n_epochs=10,batch_size=20):
         epoch = epoch + 1
         for minibatch_index in range(n_train_batches):
             batch = X_train[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]
-            noise = generate_noise(batch_size=batch_size,100)
+            noise = generate_noise(batch_size=batch_size,noise_length=100)
             minibatch_avg_cost_dis = train_dis_fn(noise,batch)
             minibatch_avg_cost_gen = train_gen_fn(noise)
             # iteration number
             iter = (epoch - 1) * n_train_batches + minibatch_index
 
             if iter % 20 == 0:
-                print "Discriminator Loss : ", loss_dis
-                print "Generator Loss : " , loss_gen
+                print ("Discriminator Loss : ", loss_dis)
+                print ("Generator Loss : " , loss_gen)
 
         # for i in range (gen_output.shape(0)):
         #     Image.fromarray(image_example[i,:,:,:]).show()
@@ -225,9 +228,9 @@ def train_DCGAN(learning_rate=0.01,n_epochs=10,batch_size=20):
 
     end_time = timeit.default_timer()
 
-    print "Code ran for : ", (end_time - start_time) / 60.
+    print ("Code ran for : ", (end_time - start_time) / 60.)
 
 if __name__ == '__main__':
-    print "Running Main"
+    print ("Running Main")
     start_time = timeit.default_timer()
     train_DCGAN()
