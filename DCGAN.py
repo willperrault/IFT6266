@@ -77,8 +77,8 @@ def load_data(split="inpainting/train2014", caption_path="inpainting/dict_key_im
 
         #caption_path = os.path.join(os.getcwd(), caption_path)
         caption_path="/Users/williamperrault/Desktop/University/Maitrise/1st_year/H2017/IFT6266/Projet/inpainting/dict_key_imgID_value_caps_train_and_valid.pkl"
-        with open(caption_path) as fd:
-            caption_dict = pkl.load(fd)
+        #with open(caption_path) as fd:
+        #    caption_dict = pkl.load(fd)
 
         print (data_path + "/*.jpg")
         imgs = glob.glob(data_path + "/*.jpg")
@@ -122,6 +122,9 @@ def load_data(split="inpainting/train2014", caption_path="inpainting/dict_key_im
                     Image.fromarray(input).show()
                     Image.fromarray(target).show()
                     print (i, caption_dict[cap_id])
+
+                if i % 500 == 0:
+                    break
 
         end_time = timeit.default_timer()
 
@@ -183,7 +186,7 @@ def train_DCGAN(learning_rate=0.01,n_epochs=10,batch_size=20):
 
     # The following code is heavily based if not directly from the MLP tutorial from http://deeplearning.net/tutorial/mlp.html
 
-    validation_frequency = min(n_train_batches) #, patience // 2)
+    #validation_frequency = min(n_train_batches) #, patience // 2)
                                   # go through this many
                                   # minibatche before checking the network
                                   # on the validation set; in this case we
