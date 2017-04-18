@@ -12,8 +12,6 @@ import glob
 
 import pdb
 
-theano.config.floatX='float32'
-
 # Code structure inspired from https://lasagne.readthedocs.io/en/latest/user/tutorial.html
 
 def generate_noise(batch_size,noise_length=100):
