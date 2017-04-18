@@ -136,9 +136,6 @@ def normalize_input(split="inpainting/train2014"):
 
 def train_DCGAN(learning_rate=0.01,n_epochs=10,batch_size=20):
 
-    # Load the dataset
-    X_train = load_data()
-
     # Prepare Theano variables for inputs and targets
     noise = T.tensor4('noise')
     real_image = T.tensor4('real_image')

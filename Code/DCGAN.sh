@@ -6,7 +6,7 @@
 
 source activate py35
 
-#scp -rp /Users/williamperrault/Github/H2017/IFT6266/Code ift6ed51@hades.calculquebec.ca:
+#scp -rp /Users/williamperrault/Github/H2017/IFT6266/Code/. ift6ed51@hades.calculquebec.ca:
 
 cd ~/Calcul_quebec
 python DCGAN.py
