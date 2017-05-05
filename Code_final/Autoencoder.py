@@ -14,6 +14,9 @@ import glob
 
 import pdb
 
+from utils import load_data
+from utils import extract_target
+
 # Code structure inspired from
 # https://lasagne.readthedocs.io/en/latest/user/tutorial.html
 
@@ -60,27 +63,6 @@ def build_autoencoder(input_var=None):
         autoencoder, num_filters=3, filter_size=(4, 4), stride=(2, 2), crop=1, nonlinearity=lasagne.nonlinearities.sigmoid))
 
     return autoencoder
-
-def load_data(data_num=0, train=True):
-
-    if os.getcwd() == '/Users/williamperrault/Github/H2017/IFT6266/Code':
-        if train:
-            name = '/Users/williamperrault/Github/H2017/IFT6266/Data/train_data' + \
-                str(data_num) + '.npy'
-        else:
-            name = '/Users/williamperrault/Github/H2017/IFT6266/Data/valid_data' + \
-                str(data_num) + '.npy'
-    else:
-        if train:
-            name = '/home2/ift6ed51/Data/train_data' + str(data_num) + '.npy'
-        else:
-            name = '/home2/ift6ed51/Data/valid_data' + str(data_num) + '.npy'
-    f = open(name, 'rb')
-    Data = np.load(f)
-
-    f.close()
-
-    return Data, Data.shape[0]
 
 def produce_samples(params_gen, samples=3):
     """Function to produce samples from the generator"""
@@ -138,136 +120,181 @@ def produce_samples(params_gen, samples=3):
     fig_name = 'AE5' + params_gen[:-7] + params_gen[-2:]
     fig.savefig(fig_name)
 
-def train_AE(learning_rate=0.01, n_epochs=10, batch_size=128):
+def train_AE(learning_rate=0.0009, n_epochs=5, batch_size=128):
 
     # Prepare Theano variables for inputs and targets
-    real_image = T.tensor4('real_image')
-    target = T.tensor4('target')
-    minibatch_index = T.iscalar()
+    input_image = T.tensor4('input_image',dtype=theano.config.floatX)
+    ae_output = T.tensor4('ae_output',dtype=theano.config.floatX)
+    target_image = T.tensor4('target_image',dtype=theano.config.floatX)
+    sample_context = T.tensor4('target_image',dtype=theano.config.floatX)
 
-    data1 = theano.shared(
-        np.empty((1, 1, 1, 1), dtype=theano.config.floatX), borrow=True)
-    data2 = theano.shared(
-        np.empty((1, 1, 1, 1), dtype=theano.config.floatX), borrow=True)
+    minibatch_index = T.iscalar('minibatch_index')
+
+    # Prepare shared variable for use by GPU
+    shared_input = theano.shared(
+        np.empty((10348, 3, 64, 64), dtype=theano.config.floatX), borrow=True)
+
+    shared_target = theano.shared(
+        np.empty((10348, 3, 64, 64), dtype=theano.config.floatX), borrow=True)
 
     # Create neural network model
     print (".........building the model")
 
-    autoencoder = build_autoencoder(real_image)
-    gen_image = lasagne.layers.get_output(autoencoder)
+    autoencoder = build_autoencoder(input_image)
+    ae_output = lasagne.layers.get_output(autoencoder)
+    generated_img = lasagne.layers.get_output(autoencoder, inputs=sample_context)
 
     # Calculate Loss:
-    loss_ae = lasagne.objectives.squared_error(gen_image, target)
-    loss_ae = loss_ae.mean()
+    loss_ae = T.mean(lasagne.objectives.squared_error(ae_output, target_image))
 
+    # Extract parameters and prepare updates
     params_ae = lasagne.layers.get_all_params(autoencoder, trainable=True)
 
     updates_ae = lasagne.updates.adam(
-        loss_ae, params_ae, learning_rate=0.001, beta1=0.5, beta2=0.999, epsilon=1e-08)
+        loss_ae, params_ae, learning_rate=learning_rate)
 
-    # Compile
-    train_ae_fn = theano.function([minibatch_index], loss_ae, allow_input_downcast=True, updates=updates_ae, givens={real_image: data1[
-                                  minibatch_index * batch_size: (minibatch_index + 1) * batch_size], target: data2[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
+    # Compile functions for training
+    train_fn = theano.function([minibatch_index], loss_ae, allow_input_downcast=True, updates=updates_ae, givens={input_image: shared_input[minibatch_index * batch_size: (minibatch_index + 1) * batch_size], target_image: shared_target[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
 
-    valid_ae_fn = theano.function([minibatch_index], loss_ae, allow_input_downcast=True, givens={real_image: data1[
-                                  minibatch_index * batch_size: (minibatch_index + 1) * batch_size], target: data2[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
+    valid_fn = theano.function([minibatch_index], loss_ae, allow_input_downcast=True, givens={input_image: shared_input[
+                                  minibatch_index * batch_size: (minibatch_index + 1) * batch_size], target_image: shared_target[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
+
+    output_ae_fn = theano.function(
+        [sample_context], generated_img, allow_input_downcast=True)
 
     # Training Loop
 
-    print(".........begin Training")
+    print(".........begin training")
 
     # The following code is heavily based if not directly from the MLP
     # tutorial from http://deeplearning.net/tutorial/mlp.html
 
     best_iter = 0
-    valid_score = 0
+    best_valid_score = np.inf
 
     epoch = 0
     done_looping = False
 
+    detailed_training_loss = []
+    training_loss = []
+    valid_loss = []
+
     while (epoch < n_epochs):
-        w = open('ae_loss.txt', 'a')
+
         epoch = epoch + 1
-        train_acc_cost = 0
+        temp_loss = []
 
         # Training loop
-        for data_split in range(4):
-            temp, n_examples = load_data(data_split, train=True)
+        for data_split in range(8):
 
-            center = (
-                int(np.floor(temp.shape[2] / 2.)), int(np.floor(temp.shape[3] / 2.)))
-            temp1 = np.copy(temp)
-            temp1[:, :, center[0] - 16:center[0] +
-                  16, center[1] - 16:center[1] + 16] = 0
-            temp2 = temp[:, :, center[0] - 16:center[0] +
-                         16, center[1] - 16:center[1] + 16]
+            # Load original images and their number from the loaded file
+            data, n_examples = load_data(data_split, train=True)
 
-            data1.set_value(temp1)
-            data2.set_value(temp2)
+            # Split the image in context and target
+            context,targets = extract_target(data)
+
+            # Load context and target in shared variables
+            shared_input.set_value(context)
+            shared_target.set_value(targets)
 
             n_train_batches = n_examples // batch_size
 
             for minibatch_index in range(n_train_batches):
 
-                minibatch_avg_cost_ae = train_ae_fn(minibatch_index)
-                train_acc_cost += minibatch_avg_cost_ae
+                minibatch_cost = train_fn(minibatch_index)
+                temp_loss.append(minibatch_cost)
 
-                iter = (epoch - 1) * n_train_batches + minibatch_index
+                if minibatch_index % 20 == 0:
+                    detailed_training_loss.append(minibatch_cost)
 
-                if False:  # iter % 50 == 0:
-                    w.write(str(minibatch_avg_cost_ae) + ' \n')
+        # Take 3 random succesive images from the last batch to generate samples
+        rand_int = np.random.randint(0, high=n_examples-3)
+        sample_context = data[rand_int:rand_int+3,:,:,:]
 
-        train_score = train_acc_cost / n_train_batches
+        epoch_examples = output_ae_fn(sample_context) * 255.0
+        epoch_examples = np.swapaxes(epoch_examples, 1, 2)
+        epoch_examples = np.swapaxes(epoch_examples, 2, 3)
+        sample_context = np.swapaxes(sample_context, 1, 2)
+        sample_context = np.swapaxes(sample_context, 2, 3)
+
+        np.save('AE_samples'+str(epoch),epoch_examples)
+        np.save('AE_samples_context'+str(epoch),sample_context*255.0)
+
+        # Keep relevant loss information
+        epoch_mean = sum(temp_loss)/len(temp_loss)
+        training_loss.append(epoch_mean)
+
         epoch_time = timeit.default_timer()
         print ("Training Epoch ran for : ", (epoch_time - start_time) / 60.)
 
         # Valid loop:
-        valid_acc_cost = 0
-        for data_split in range(2):
-            temp, n_examples = load_data(data_split, train=False)
+        temp_loss = []
 
-            center = (
-                int(np.floor(temp.shape[2] / 2.)), int(np.floor(temp.shape[3] / 2.)))
-            temp1 = np.copy(temp)
-            temp1[:, :, center[0] - 16:center[0] +
-                  16, center[1] - 16:center[1] + 16] = 0
-            temp2 = temp[:, :, center[0] - 16:center[0] +
-                         16, center[1] - 16:center[1] + 16]
+        for data_split in range(4):
 
-            data1.set_value(temp1)
-            data2.set_value(temp2)
+            # Load original images and their number from the loaded file
+            data, n_examples = load_data(data_split, train=False)
+
+            # Split the image in context and target
+            context,targets = extract_target(data)
+
+            # Load context and target in shared variables
+            shared_input.set_value(context)
+            shared_target.set_value(targets)
 
             n_train_batches = n_examples // batch_size
 
             for minibatch_index in range(n_train_batches):
 
-                valid_acc_cost += valid_ae_fn(minibatch_index)
+                minibatch_cost = train_fn(minibatch_index)
+                temp_loss.append(minibatch_cost)
 
-        valid_score = valid_acc_cost / n_train_batches
-        w.write(str(train_score) + ' ' + str(valid_score) + ' \n')
+        # Keep relevant loss information
+        epoch_mean = sum(temp_loss)/len(temp_loss)
+        valid_loss.append(epoch_mean)
 
-        valid_time = timeit.default_timer()
-        print ("Valid Epoch ran for : ", (valid_time - start_time) / 60.)
+        epoch_time = timeit.default_timer()
+        print ("Valid Epoch ran for : ", (epoch_time - start_time) / 60.)
 
-        # Save parameters every 2 epochs
-        if epoch % 2 == 1:
+        # Save parameters every 3 epochs or when new best
+        if valid_loss[-1] < best_valid_score:
             autoencoder_params = lasagne.layers.get_all_param_values(
                 autoencoder)
 
-            f = open('ae_params.save' + str(epoch), 'wb')
+            f = open('AE_params_best.save', 'wb')
             cPickle.dump(autoencoder_params, f,
                          protocol=cPickle.HIGHEST_PROTOCOL)
             f.close()
 
-        w.close()
-        # x.close()
+            best_valid_score = valid_loss[-1]
+            best_iter = epoch
+
+        elif epoch % 3 == 1:
+            autoencoder_params = lasagne.layers.get_all_param_values(
+                autoencoder)
+
+            f = open('AE_params' + str(epoch) + 'save', 'wb')
+            cPickle.dump(autoencoder_params, f,
+                         protocol=cPickle.HIGHEST_PROTOCOL)
+            f.close()
+
+    # Save loss information for later analysis:
+    with open('AE_detailed_training_loss.save', 'wb') as fp:
+        pkl.dump(detailed_training_loss, fp)
+
+    with open('AE_valid_loss.save', 'wb') as fp:
+        pkl.dump(valid_loss, fp)
+
+    with open('AE_training_loss.save', 'wb') as fp:
+        pkl.dump(training_loss, fp)
+
     end_time = timeit.default_timer()
 
     print ("Code ran for : ", (end_time - start_time) / 60.)
+
+    print('Best valid score of %f at epoch %i' % (best_valid_score,epoch))
 
 if __name__ == '__main__':
     print ("Running Main")
     start_time = timeit.default_timer()
     train_AE()
-    for i in range(1,10,2):
-        produce_samples('ae_params.save'+str(i))

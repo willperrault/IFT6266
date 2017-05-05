@@ -2,10 +2,8 @@ import os
 os.environ["THEANO_FLAGS"] = "floatX=float32"
 import pickle as pkl
 from six.moves import cPickle
-import PIL.Image as Image
 import timeit
 import numpy as np
-from matplotlib import pyplot as plt
 
 import theano
 import theano.tensor as T
@@ -14,10 +12,12 @@ import glob
 
 import pdb
 
+from utils import load_data
+from utils import extract_target
 
 # Code structure inspired from https://lasagne.readthedocs.io/en/latest/user/tutorial.html
 
-def build_CAEGAN(input_var=None):
+def build_generator(input_var=None):
     """Generator part of the Context Autoencoder GAN"""
 
     # Input is the a (Minibatch,3,64,64) matrix of images with no center
@@ -62,29 +62,6 @@ def build_discriminator(input_var=None):
     network = lasagne.layers.DenseLayer(network, num_units=1, nonlinearity=lasagne.nonlinearities.sigmoid)
 
     return network
-
-def load_data(data_num=0, train=True):
-
-    """ Function to load the either training or validation images from one of the 4 training files or 2 validation files (numbered respectively 0 to 3 or 0 and 1)"""
-
-    if os.getcwd() == '/Users/williamperrault/Github/H2017/IFT6266/Code':
-        if train:
-            name = '/Users/williamperrault/Github/H2017/IFT6266/Data/train_data' + \
-                str(data_num) + '.npy'
-        else:
-            name = '/Users/williamperrault/Github/H2017/IFT6266/Data/valid_data' + \
-                str(data_num) + '.npy'
-    else:
-        if train:
-            name = '/home2/ift6ed51/Data/train_data' + str(data_num) + '.npy'
-        else:
-            name = '/home2/ift6ed51/Data/valid_data' + str(data_num) + '.npy'
-    f = open(name, 'rb')
-    Data = np.load(f)
-
-    f.close()
-
-    return Data, Data.shape[0]
 
 def produce_samples(params_gen,samples=3):
     """Function to produce samples from the generator"""
@@ -134,52 +111,67 @@ def produce_samples(params_gen,samples=3):
     fig_name = 'CAEGAN2'+ params_gen[:-7] + params_gen[-2:]
     fig.savefig(fig_name)
 
-def train_CAEGAN(learning_rate=0.01,n_epochs=3,batch_size=32):
+def train_CAEGAN(learning_rateG=0.004,learning_rateD=0.005,n_epochs=1,batch_size=32):
 
     # Prepare Theano variables for inputs and targets
-    context_image = T.tensor4('context_image')
-    context_target = T.tensor4('context_target')
+    input_image = T.tensor4('input_image',dtype=theano.config.floatX)
+    gen_output = T.tensor4('gen_output',dtype=theano.config.floatX)
+    dis_output = T.matrix('dis_output',dtype=theano.config.floatX)
+    target_image = T.tensor4('target_image',dtype=theano.config.floatX)
+    sample_context = T.tensor4('target_image',dtype=theano.config.floatX)
 
-    generated_target = T.tensor4('generated_target')
+    minibatch_index = T.iscalar('minibatch_index')
 
-    minibatch_index = T.iscalar()
+    # Prepare shared variable for use by GPU
+    shared_input = theano.shared(
+        np.empty((10348, 3, 64, 64), dtype=theano.config.floatX), borrow=True)
 
-    data1 = theano.shared(np.empty((1,1,1,1), dtype=theano.config.floatX),borrow=True)
-    data2 = theano.shared(np.empty((1,1,1,1), dtype=theano.config.floatX),borrow=True)
+    shared_target = theano.shared(
+        np.empty((10348, 3, 64, 64), dtype=theano.config.floatX), borrow=True)
 
     # Create neural network model
     print (".........building the model")
 
-    generator = build_CAEGAN(context_image)
-    generated_target = lasagne.layers.get_output(generator)
+    generator = build_generator(input_image)
+    discriminator = build_discriminator(target_image)
 
-    discriminator = build_discriminator(context_target)
+        # with open('CG_gen_params_best.save15', 'rb') as fp:
+        #     params = cPickle.load(fp)
+        #     lasagne.layers.set_all_param_values(generator, params)
+        #
+        # with open('CG_dis_params_best.save15', 'rb') as fp:
+        #     params = cPickle.load(fp)
+        #     lasagne.layers.set_all_param_values(discriminator, params)
 
-    prediction_real = lasagne.layers.get_output(discriminator)
-    prediction_gen = lasagne.layers.get_output(discriminator,inputs=generated_target)
+    gen_output = lasagne.layers.get_output(generator)
+    dis_output = lasagne.layers.get_output(discriminator)
+    generated_img = lasagne.layers.get_output(generator, inputs=sample_context)
+    dis_output_fake = lasagne.layers.get_output(discriminator, inputs=gen_output)
 
     # Calculate Loss :
 
-    loss_gen_L2= T.mean(lasagne.objectives.squared_error(generated_target, context_target))
-    loss_gen_GAN= 0.5*T.mean(lasagne.objectives.squared_error(prediction_gen, 1))
+    loss_gen_L2= T.mean(lasagne.objectives.squared_error(gen_output, target_image))
+    loss_gen_GAN= T.mean(lasagne.objectives.binary_crossentropy(dis_output_fake, 1))
 
     loss_gen = 0.999*loss_gen_L2 + 0.001*loss_gen_GAN
-    loss_gen = loss_gen.mean()
 
-    loss_dis_GAN = 0.5*lasagne.objectives.squared_error(prediction_gen, 0) + 0.5*lasagne.objectives.squared_error(prediction_real, 1)
-    loss_dis = 0.001*loss_dis_GAN.mean()
+    loss_dis_GAN = T.mean(lasagne.objectives.binary_crossentropy(dis_output_fake, 0) + lasagne.objectives.binary_crossentropy(dis_output, 1))
+
+    loss_dis = 0.001*loss_dis_GAN
 
     params_gen = lasagne.layers.get_all_params(generator, trainable=True)
     params_dis = lasagne.layers.get_all_params(discriminator, trainable=True)
 
-    updates_gen = lasagne.updates.adam(loss_gen, params_gen, learning_rate=0.0005, beta1=0.5, beta2=0.999, epsilon=1e-08)
-    updates_dis = lasagne.updates.adam(loss_dis, params_dis, learning_rate=0.0004, beta1=0.5, beta2=0.999, epsilon=1e-08)
+    updates_gen = lasagne.updates.adam(loss_gen, params_gen, learning_rate=learning_rateG)
+    updates_dis = lasagne.updates.adam(loss_dis, params_dis, learning_rate=learning_rateD)
 
-    # Compile
+    # Compile functions for training
+    train_gen_fn = theano.function([minibatch_index], loss_gen,allow_input_downcast=True, on_unused_input='ignore', updates=updates_gen,givens={input_image: shared_input[minibatch_index * batch_size: (minibatch_index + 1) * batch_size],target_image: shared_target[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
 
-    train_gen_fn = theano.function([minibatch_index], loss_gen,allow_input_downcast=True, on_unused_input='ignore', updates=updates_gen,givens={context_image: data1[minibatch_index * batch_size: (minibatch_index + 1) * batch_size],context_target: data2[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
+    train_dis_fn = theano.function([minibatch_index], loss_dis,allow_input_downcast=True,on_unused_input='ignore', updates=updates_dis,givens={input_image: shared_input[minibatch_index * batch_size: (minibatch_index + 1) * batch_size],target_image: shared_target[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
 
-    train_dis_fn = theano.function([minibatch_index], loss_dis,allow_input_downcast=True,on_unused_input='ignore', updates=updates_dis,givens={context_target: data2[minibatch_index * batch_size: (minibatch_index + 1) * batch_size],context_image: data1[minibatch_index * batch_size: (minibatch_index + 1) * batch_size]})
+    output_gen_fn = theano.function(
+        [sample_context], generated_img, allow_input_downcast=True)
 
     # Training Loop
 
@@ -188,46 +180,70 @@ def train_CAEGAN(learning_rate=0.01,n_epochs=3,batch_size=32):
     # The following code is heavily based if not directly from the MLP tutorial from http://deeplearning.net/tutorial/mlp.html
 
     best_iter = 0
-    valid_score = 0
+    best_valid_score = np.inf
 
     epoch = 0
     done_looping = False
+
+    detailed_training_loss1 = []
+    detailed_training_loss2 = []
+    training_loss1 = []
+    training_loss2 = []
 
     while (epoch < n_epochs):
 
         w = open('CAEGAN_loss.txt', 'a')
 
         epoch = epoch + 1
-        D_train_acc_cost = 0
-        G_train_acc_cost = 0
+        temp_loss1 = []
+        temp_loss2 = []
 
         # Training loop
-        for data_split in range(4):
+        for data_split in range(8):
 
-            temp,n_examples = load_data(data_split,train=True)
+            # Load original images and their number from the loaded file
+            data, n_examples = load_data(data_split, train=True)
 
-            center = (int(np.floor(temp.shape[2] / 2.)), int(np.floor(temp.shape[3] / 2.)))
-            temp1 = np.copy(temp)
-            temp1[:,:,center[0]-16:center[0]+16, center[1]-16:center[1]+16] = 0
-            temp2 = temp[:,:,center[0]-16:center[0]+16, center[1] - 16:center[1]+16]
+            # Split the image in context and target
+            context,targets = extract_target(data)
 
-            data1.set_value(temp1)
-            data2.set_value(temp2)
+            # Load context and target in shared variables
+            shared_input.set_value(context)
+            shared_target.set_value(targets)
 
             n_train_batches = n_examples // batch_size
 
             for minibatch_index in range(n_train_batches):
 
-                D_minibatch_avg_cost = train_dis_fn(minibatch_index)
-                D_train_acc_cost += D_minibatch_avg_cost
+                minibatch_cost1 = train_gen_fn(minibatch_index)
+                temp_loss1.append(minibatch_cost1)
 
-                G_minibatch_avg_cost = train_gen_fn(minibatch_index)
-                G_train_acc_cost += G_minibatch_avg_cost
+                minibatch_cost2 = train_dis_fn(minibatch_index)
+                temp_loss2.append(minibatch_cost2)
 
-                iter = (epoch - 1) * n_train_batches + minibatch_index
+                if minibatch_index % 20 == 0:
+                    detailed_training_loss1.append(minibatch_cost1)
+                    detailed_training_loss2.append(minibatch_cost2)
 
-                if iter % 2== 0:
-                    w.write(str(D_minibatch_avg_cost)+' '+str(G_minibatch_avg_cost)+' \n')
+        # Take 3 random succesive images from the last batch to generate samples
+        rand_int = np.random.randint(0, high=n_examples-3)
+        sample_context = data[rand_int:rand_int+3,:,:,:]
+
+        epoch_examples = output_gen_fn(sample_context) * 255.0
+        epoch_examples = np.swapaxes(epoch_examples, 1, 2)
+        epoch_examples = np.swapaxes(epoch_examples, 2, 3)
+        sample_context = np.swapaxes(sample_context, 1, 2)
+        sample_context = np.swapaxes(sample_context, 2, 3)
+
+        np.save('CG_samples'+str(epoch),epoch_examples)
+        np.save('CG_samples_context'+str(epoch),sample_context*255.0)
+
+        # Keep relevant loss information
+        epoch_mean = sum(temp_loss1)/len(temp_loss1)
+        training_loss1.append(epoch_mean)
+
+        epoch_mean = sum(temp_loss2)/len(temp_loss2)
+        training_loss2.append(epoch_mean)
 
         epoch_time = timeit.default_timer()
         print ("Training Epoch ran for : ", (epoch_time - start_time) / 60.)
@@ -245,8 +261,18 @@ def train_CAEGAN(learning_rate=0.01,n_epochs=3,batch_size=32):
             cPickle.dump(discriminator_params, g, protocol=cPickle.HIGHEST_PROTOCOL)
             g.close()
 
+    with open('CG_detailed_training_loss_gen.save', 'wb') as fp:
+        pkl.dump(detailed_training_loss1, fp)
 
-        w.close()
+    with open('CG_detailed_training_loss_dis.save', 'wb') as fp:
+        pkl.dump(detailed_training_loss2, fp)
+
+    with open('CG_training_loss_gen.save', 'wb') as fp:
+        pkl.dump(training_loss1, fp)
+
+    with open('CG_training_loss_dis.save', 'wb') as fp:
+        pkl.dump(training_loss2, fp)
+
     end_time = timeit.default_timer()
 
     print ("Code ran for : ", (end_time - start_time) / 60.)
@@ -255,5 +281,3 @@ if __name__ == '__main__':
     print ("Running Main")
     start_time = timeit.default_timer()
     train_CAEGAN()
-    for i in range(1,4,2):
-        produce_samples('CG_gen_params.save'+str(i))
